@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__TITLE__</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #f5f6fa; color: #333; }
+  .header { background: linear-gradient(135deg, #1f3b73, #2f5da8); color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header .sub { font-size: 12px; opacity: .85; margin-top: 4px; }
+  .stats { display: flex; gap: 10px; }
+  .stats span { background: rgba(255,255,255,.15); padding: 4px 10px; border-radius: 12px; font-size: 12px; }
+  .layout { display: flex; height: calc(100vh - 60px); }
+  .side { width: 268px; background: #fff; border-right: 1px solid #e3e6ef; overflow-y: auto; padding: 14px; }
+  .side h3 { font-size: 13px; color: #1f3b73; margin: 12px 0 8px; }
+  .side h3:first-child { margin-top: 0; }
+  .filter-group { display: flex; flex-direction: column; gap: 6px; }
+  .filter-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 5px 8px; border-radius: 6px; cursor: pointer; user-select: none; }
+  .filter-item:hover { background: #f0f2f9; }
+  .filter-item .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .filter-item .cnt { margin-left: auto; color: #999; font-size: 11px; }
+  .filter-item input { accent-color: #2f5da8; }
+  .btn-row { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-row button { flex: 1; border: 1px solid #d0d4e0; background: #fff; padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .btn-row button:hover { background: #f0f2f9; }
+  .search-box input { width: 100%; padding: 7px 10px; border: 1px solid #d0d4e0; border-radius: 6px; font-size: 13px; }
+  .info-panel { background: #f8f9fd; border: 1px solid #e3e6ef; border-radius: 8px; padding: 10px; margin-top: 12px; font-size: 12px; max-height: 220px; overflow-y: auto; }
+  .info-panel .t { font-weight: 600; color: #1f3b73; margin-bottom: 4px; }
+  .info-panel .row { display: flex; gap: 6px; margin: 3px 0; }
+  .info-panel .row .k { color: #888; flex-shrink: 0; width: 64px; }
+  .info-panel .rel { color: #666; }
+  .info-panel .rel b { color: #2f5da8; }
+  .legend-note { font-size: 11px; color: #999; margin-top: 8px; line-height: 1.6; }
+  #chart { flex: 1; background: #fff; position: relative; }
+  .empty-tip { position: absolute; top: 40%; left: 50%; transform: translate(-50%,-50%); color: #aaa; font-size: 15px; text-align: center; display: none; }
+  .load-error { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #fff; display: flex; align-items: center; justify-content: center; z-index: 999; font-size: 16px; color: #c0392b; }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>__TITLE__</h1>
+    <div class="sub">数据来源：M1~M7+ME 八模型 YAML · 力导向图 · 点击节点高亮关联</div>
+  </div>
+  <div class="stats" id="stats"></div>
+</div>
+<div class="layout">
+  <div class="side">
+    <h3>🔍 节点检索</h3>
+    <div class="search-box"><input id="search" placeholder="输入名称/ID 定位节点…" oninput="searchNode(this.value)"></div>
+
+    <h3>◉ 显示类型</h3>
+    <div class="filter-group" id="filters"></div>
+    <div class="btn-row">
+      <button onclick="setAll(true)">全选</button>
+      <button onclick="setAll(false)">全不选</button>
+    </div>
+
+    <h3>◈ 显示选项</h3>
+    <div class="filter-group">
+      <label class="filter-item"><input type="checkbox" id="optEdgeLabel" onchange="toggleEdgeLabel(this.checked)"><span>显示关系标签</span></label>
+      <label class="filter-item"><input type="checkbox" id="optNodeLabel" checked onchange="toggleNodeLabel(this.checked)"><span>显示节点名称</span></label>
+      <label class="filter-item"><input type="checkbox" id="optEdgeColor" checked onchange="toggleEdgeColor(this.checked)"><span>按关系类型着色</span></label>
+    </div>
+
+    <h3>ℹ 节点信息</h3>
+    <div class="info-panel" id="info">
+      <div class="t">点击图谱中的节点查看详情</div>
+      <div class="legend-note">拖动节点可调整布局；滚轮缩放；点击节点可高亮其全部关联。</div>
+    </div>
+  </div>
+  <div id="chart">
+    <div class="empty-tip" id="emptyTip">未选择任何类型，请勾选左侧显示类型</div>
+  </div>
+</div>
+
+<script>
+const GRAPH = __GRAPH_DATA__;
+
+if (typeof echarts === 'undefined') {
+  document.getElementById('chart').innerHTML =
+    '<div class="load-error">ECharts 图表库未能加载，请检查文件完整性。</div>';
+} else {
+
+const TYPE_META = {};
+GRAPH.categories.forEach(c => { TYPE_META[c.type] = c; });
+
+function symbolSize(t) {
+  const map = { aggregate: 34, entity: 24, value_object: 18, dictionary: 16, behavior: 18,
+    rule: 16, event: 22, scenario: 26, flow: 30, role: 26, permission: 16, external: 24,
+    report: 20 };
+  return map[t] || 16;
+}
+
+const fullNodes = GRAPH.nodes.map(n => ({
+  ...n,
+  category: GRAPH.categories.findIndex(c => c.type === n.type),
+  symbolSize: symbolSize(n.type),
+  itemStyle: { color: TYPE_META[n.type].color }
+}));
+
+const nodeIndex = {};
+fullNodes.forEach(n => nodeIndex[n.id] = n);
+
+let chart = echarts.init(document.getElementById('chart'));
+let edgeColorMode = true;
+
+function buildEdges() {
+  return GRAPH.edges.map(e => ({
+    ...e,
+    lineStyle: { color: edgeColorMode ? (GRAPH.edgeColors[e.type] || '#ccc') : '#c9cfda',
+                 width: 1, opacity: .55, curveness: .08 }
+  }));
+}
+let fullEdges = buildEdges();
+
+function buildSeries(nodeData, linkData) {
+  return [{
+    type: 'graph',
+    layout: 'force',
+    roam: true,
+    draggable: true,
+    data: nodeData,
+    links: linkData,
+    categories: GRAPH.categories.map(c => ({ name: c.name, itemStyle: { color: c.color } })),
+    force: { repulsion: 320, edgeLength: [60, 140], gravity: 0.08, layoutAnimation: true },
+    label: { show: true, position: 'right', fontSize: 10, color: '#555', formatter: p => p.data.name },
+    edgeLabel: {
+      show: false, fontSize: 9, color: '#8a94a6', formatter: p => p.data.label || GRAPH.edgeLabels[p.data.type] || ''
+    },
+    lineStyle: { opacity: .5, width: 1 },
+    emphasis: {
+      focus: 'adjacency',
+      label: { fontSize: 13, fontWeight: 'bold', color: '#1f3b73' },
+      lineStyle: { width: 2.5, opacity: 1 }
+    },
+    blur: { label: { color: '#ccc' }, itemStyle: { opacity: 0.25 } }
+  }];
+}
+
+// ── 过滤状态 ──
+const filters = {};
+GRAPH.categories.forEach(c => filters[c.type] = true);
+
+function buildFilterPanel() {
+  const el = document.getElementById('filters');
+  el.innerHTML = '';
+  GRAPH.categories.forEach(c => {
+    const cnt = fullNodes.filter(n => n.type === c.type).length;
+    const div = document.createElement('label');
+    div.className = 'filter-item';
+    div.innerHTML = `<span class="dot" style="background:${c.color}"></span>
+      <input type="checkbox" data-type="${c.type}" checked onchange="toggleType('${c.type}', this.checked)">
+      <span>${c.name}</span><span class="cnt">${cnt}</span>`;
+    el.appendChild(div);
+  });
+}
+
+function toggleType(type, checked) {
+  filters[type] = checked;
+  applyFilter();
+}
+
+function setAll(v) {
+  GRAPH.categories.forEach(c => { filters[c.type] = v; });
+  document.querySelectorAll('#filters input').forEach(i => i.checked = v);
+  applyFilter();
+}
+
+function applyFilter() {
+  const active = new Set(Object.keys(filters).filter(t => filters[t]));
+  const nodeData = fullNodes.filter(n => active.has(n.type));
+  const ids = new Set(nodeData.map(n => n.id));
+  const linkData = fullEdges.filter(e => ids.has(e.source) && ids.has(e.target));
+  chart.setOption({ series: buildSeries(nodeData, linkData) });
+  document.getElementById('emptyTip').style.display = nodeData.length ? 'none' : 'block';
+  document.getElementById('stats').innerHTML =
+    `<span>节点 ${nodeData.length}</span><span>关系 ${linkData.length}</span>`;
+}
+
+function toggleEdgeLabel(on) {
+  chart.setOption({ series: [{ edgeLabel: { show: on } }] });
+}
+function toggleNodeLabel(on) {
+  chart.setOption({ series: [{ label: { show: on } }] });
+}
+function toggleEdgeColor(on) {
+  edgeColorMode = on;
+  fullEdges = buildEdges();
+  applyFilter();
+}
+
+// ── 主图 ──
+chart.setOption({
+  tooltip: {
+    trigger: 'item',
+    formatter: p => {
+      if (p.dataType === 'node') {
+        const n = p.data;
+        return `<b>${n.name}</b><br/>类型：${TYPE_META[n.type].name}（${n.model}）<br/>${n.desc || ''}`;
+      }
+      const l = p.data;
+      return `${(nodeIndex[l.source]||{}).name||l.source} → ${(nodeIndex[l.target]||{}).name||l.target}<br/>关系：${GRAPH.edgeLabels[l.type]||l.type}（${l.model}）`;
+    }
+  },
+  legend: [{
+    data: GRAPH.categories.map(c => c.name),
+    textStyle: { fontSize: 11 },
+    selectedMode: false,
+    bottom: 0, left: 'center'
+  }],
+  series: buildSeries(fullNodes, fullEdges)
+});
+
+// ── 点击节点显示详情 ──
+chart.on('click', params => {
+  if (params.dataType !== 'node') return;
+  const n = params.data;
+  const info = document.getElementById('info');
+  const rels = fullEdges.filter(e => e.source === n.id || e.target === n.id);
+  const lines = [];
+  rels.forEach(e => {
+    const otherId = e.source === n.id ? e.target : e.source;
+    const other = nodeIndex[otherId];
+    if (!other) return;
+    lines.push(`<div class="rel">${e.source === n.id ? '→' : '←'} <b>${other.name}</b>（${GRAPH.edgeLabels[e.type]||e.type}）</div>`);
+  });
+  info.innerHTML = `
+    <div class="t">${n.name}</div>
+    <div class="row"><span class="k">类型</span>${TYPE_META[n.type].name}（${n.model}）</div>
+    <div class="row"><span class="k">ID</span>${n.id}</div>
+    ${n.desc ? `<div class="row"><span class="k">说明</span>${n.desc}</div>` : ''}
+    <div class="row"><span class="k">关联数</span>${rels.length} 条关系</div>
+    <div style="margin-top:6px;border-top:1px solid #e3e6ef;padding-top:6px;">${lines.join('')}</div>`;
+});
+
+function searchNode(v) {
+  if (!v.trim()) return;
+  const q = v.trim().toLowerCase();
+  const hit = fullNodes.find(n => n.id.toLowerCase().includes(q) || (n.name||'').toLowerCase().includes(q));
+  if (hit) {
+    const idx = fullNodes.indexOf(hit);
+    chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx });
+    chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx });
+  }
+}
+
+window.addEventListener('resize', () => chart.resize());
+buildFilterPanel();
+applyFilter();
+
+} // else echarts undefined
+</script>
+</body>
+</html>

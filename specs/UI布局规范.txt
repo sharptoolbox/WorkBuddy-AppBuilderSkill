@@ -1,0 +1,40 @@
+# 3. 页面组件建模 (Functional Component Templates)
+# 定义通用页面的布局模式，支持与领域对象模型 (m1-object-model) 绑定
+component_definitions:
+  # 搜索与表格展示页模式
+  search_table_template:
+    sections:
+      - id: "filter_bar"
+        layout: "grid-4-columns" # 4列网格查询条件
+        binding: "m1_object_model.attributes (filterable: true)"
+      - id: "result_table"
+        actions: ["view", "edit", "delete", "export"]
+        pagination: true
+        selection_mode: "single"
+  
+  # 录入与维护页模式
+  entry_form_template:
+    types:
+      # 单表维护 (如供应商)
+      single_entity: 
+        layout: "grid-2-columns" # 2列布局
+        width: "100% (responsive)" # 宽度完全自适应
+        binding: "m1_object_model.entity"
+      # 主从表/1对多维护 (如采购订单)
+      master_detail:
+        layout: "form-top-table-bottom" # 上部表单，下部明细表
+        master_section: "m1_object_model.entity"
+        detail_section: "m1_object_model.relationships.items"
+
+# 5. 视觉主题规范 (Design System Tokens)
+visual_identity:
+  colors:
+    primary: "#2266e3" # 品牌蓝
+    nav_bg: "#111827"  # 深色导航背景
+    border: "#e2edf2"  # 边框
+    background: "#f0f2f6"
+  shorthands:
+    flat_style: 
+      shadow: "none"
+      radius: "0px"
+      border: "1px solid var(--divider-color)"

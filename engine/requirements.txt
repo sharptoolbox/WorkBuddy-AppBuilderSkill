@@ -1,0 +1,5 @@
+# Runtime engine has ZERO third-party dependencies (standard library only).
+# PyYAML is only needed at BUILD time to convert ontology YAML -> JSON:
+#   pip install pyyaml
+#   python engine/yaml2json.py <skill_root>/ont_yaml
+pyyaml
