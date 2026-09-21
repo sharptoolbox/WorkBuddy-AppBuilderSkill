@@ -11,19 +11,33 @@
     - 稳定编号自动着色为胶囊：FUNC/Q/REP 蓝、B/B-APP 绿、REF/INV/R 黄、ROLE/PROC 灰
     - 状态标记自动着色：[已确认] 绿、[AI自动补全] 蓝、[待确认] 橙
     - ```html 围栏与裸 HTML 块原样透传，用于装配静态界面原型（.mock 样式库内置）
-    - Mermaid 图为异步加载 + 超时/失败三重降级（保留源码并明示提示），深浅主题各配一套配色
+    - Mermaid 图三种方式：默认 CDN 异步加载；`--mermaid inline` 把 mermaid 库整段内联（交付件自包含、离线也渲染）；`--mermaid off` 仅保留源码。
+      三者都带失败降级（保留源码 + 明示提示），深浅主题各配一套配色
+    - 若正文没有 ```mermaid 代码块，`inline` 模式不会注入库（避免无谓增大体积）
     - 打印 / 导出 PDF 友好（自动隐藏顶栏与侧栏、取消宽表保底宽度）
 
 用法：
     python md_to_requirement_html.py 需求规格说明书-销售合同执行管理.md
     python md_to_requirement_html.py 输入.md -o 输出.html --theme dark --title "某系统需求规格说明书"
     python md_to_requirement_html.py 输入.md --mermaid off      # 离线环境不引入 CDN
+    python md_to_requirement_html.py 输入.md --mermaid inline   # 把 mermaid 库内联：自包含、离线也渲染成图
+    python md_to_requirement_html.py 输入.md --mermaid inline --mermaid-lib /path/to/mermaid.min.js
     python md_to_requirement_html.py 输入.md --version V10.4 --meta "需求来源：《合同需求.txt》"
+
+`--mermaid inline` 需要一份 mermaid.min.js，按以下顺序查找：
+    1) 命令行 `--mermaid-lib`
+    2) 环境变量 `MERMAID_JS_PATH`
+    3) `~/.workbuddy/vendor/mermaid.min.js`
+    4) 当前工作目录下的 `mermaid.min.js`
+获取方式（一次即可，之后所有文档共用）：
+    curl -sL -o ~/.workbuddy/vendor/mermaid.min.js \\
+      https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
 
 仅使用标准库，无需安装依赖。
 """
 import argparse
 import html
+import os
 import re
 import sys
 from pathlib import Path
@@ -689,11 +703,11 @@ h5{font-size:9.5pt;font-weight:700;margin:16px 0 8px;color:var(--text-secondary)
 """
 
 
-MERMAID_JS = """
+_MERMAID_BOOT_TMPL = """
 <script>
-/* mermaid 渲染：CDN 异步加载；离线 / 超时 / 渲染失败时一律降级为「保留源码 + 明示提示」 */
+/* mermaid 渲染：__LOAD_NOTE__；离线 / 超时 / 渲染失败时一律降级为「保留源码 + 明示提示」 */
 (function(){
-  var CDN='https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
+  __CDN_VAR__
   var done=false;
   function fallback(){
     if(done)return; done=true;
@@ -703,7 +717,7 @@ MERMAID_JS = """
       el.classList.add('mermaid-fallback');
       var tip=document.createElement('div');
       tip.className='note warn mermaid-tip';
-      tip.innerHTML='<b>图表未渲染</b>：未能加载 mermaid（离线或网络受限）。上方已保留图表源码，联网后刷新本页即可自动渲染成图。';
+      tip.innerHTML='__TIP__';
       el.parentNode.insertBefore(tip,el.nextSibling);
     });
   }
@@ -735,28 +749,89 @@ MERMAID_JS = """
         .catch(function(e){ console.error('[mermaid] run failed',e); fallback(); });
     }catch(e){ console.error('[mermaid] init failed',e); fallback(); }
   }
-  var s=document.createElement('script');
-  s.src=CDN; s.async=true; s.onload=boot; s.onerror=fallback;
-  document.head.appendChild(s);
-  setTimeout(function(){ if(!window.mermaid) fallback(); },10000);
+__TRIGGER__
 })();
 </script>
 """
 
+_MERMAID_CDN_VAR = "var CDN='https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';"
+
+_MERMAID_CDN_TRIGGER = ("  var s=document.createElement('script');\n"
+                        "  s.src=CDN; s.async=true; s.onload=boot; s.onerror=fallback;\n"
+                        "  document.head.appendChild(s);\n"
+                        "  setTimeout(function(){ if(!window.mermaid) fallback(); },10000);")
+
+_MERMAID_INLINE_TRIGGER = "  if(window.mermaid){ boot(); } else { fallback(); }"
+
+_MERMAID_TIP_CDN = ("<b>图表未渲染</b>：未能加载 mermaid（离线或网络受限）。"
+                    "上方已保留图表源码，联网后刷新本页即可自动渲染成图。")
+_MERMAID_TIP_INLINE = ("<b>图表未渲染</b>：mermaid 解析该图失败（图语法有问题）。"
+                       "上方已保留图表源码，修正后重新转换即可。")
+
+MERMAID_JS = (_MERMAID_BOOT_TMPL
+              .replace("__LOAD_NOTE__", "CDN 异步加载")
+              .replace("__CDN_VAR__", _MERMAID_CDN_VAR)
+              .replace("__TIP__", _MERMAID_TIP_CDN)
+              .replace("__TRIGGER__", _MERMAID_CDN_TRIGGER))
+
+MERMAID_OFF = ("<script>document.querySelectorAll('pre.mermaid').forEach(function(d){"
+               "d.setAttribute('data-raw','1');});</script>")
+
+# inline 模式自动查找库的位置（按顺序）
+MERMAID_LIB_CANDIDATES = (
+    "~/.workbuddy/vendor/mermaid.min.js",
+    "mermaid.min.js",
+)
+
+
+def inline_mermaid_tail(lib_js):
+    """把 mermaid 库整段内联进 HTML，使交付件自包含、离线也能把图渲染出来。
+
+    两处转义是为「库源码本身可能出现的 HTML 序列」兜底：
+      - `</script` 会提前闭合脚本块，一律改写为 `<\\/script`（JS 字符串 / 正则中语义等价）；
+      - 若库内含 `<script`，则 HTML 分词器可能因「`<!--` … `<script`」进入 double-escaped
+        状态而使真正的 `</script>` 失效，此时再把 `<!--` 改写为 `\\x3C!--` 打断该路径
+        （两者在 JS 字符串 / 正则 / 注释里语义等价）。
+    """
+    safe = lib_js.replace("</script", "<\\/script")
+    if "<script" in safe:
+        safe = safe.replace("<!--", "\\x3C!--")
+    boot = (_MERMAID_BOOT_TMPL
+            .replace("__LOAD_NOTE__", "库已内联，无需联网")
+            .replace("__CDN_VAR__", "")
+            .replace("__TIP__", _MERMAID_TIP_INLINE)
+            .replace("__TRIGGER__", _MERMAID_INLINE_TRIGGER))
+    return "<script>\n" + safe + "\n</script>\n" + boot
+
+
+def resolve_mermaid_lib(explicit):
+    """取 mermaid 库源码：优先命令行参数，其次环境变量，再次若干默认位置。"""
+    tried = []
+    if explicit:
+        tried.append(explicit)
+    elif os.environ.get("MERMAID_JS_PATH"):
+        tried.append(os.environ["MERMAID_JS_PATH"])
+    if not tried:
+        tried.extend(MERMAID_LIB_CANDIDATES)
+    for item in tried:
+        path = Path(item).expanduser()
+        if path.is_file():
+            return path.read_text(encoding="utf-8"), str(path)
+    raise FileNotFoundError("；".join(str(Path(t).expanduser()) for t in tried))
+
 
 def build_html(title: str, markdown: str, theme: str, mermaid: bool,
-               version: str = "", meta: str = "") -> str:
+               version: str = "", meta: str = "", mermaid_lib: str = "") -> str:
     blocks = parse_blocks(markdown)
     body, headings = render_body(blocks, {})
     toc = render_toc(headings)
 
-    if mermaid:
+    if mermaid_lib and "```mermaid" in markdown:
+        mermaid_tail = inline_mermaid_tail(mermaid_lib)
+    elif mermaid:
         mermaid_tail = MERMAID_JS
     else:
-        mermaid_tail = (
-            "<script>document.querySelectorAll('pre.mermaid').forEach(function(d){"
-            "d.setAttribute('data-raw','1');});</script>"
-        )
+        mermaid_tail = MERMAID_OFF
 
     vtag = f'<span class="vtag">{html.escape(version)}</span>' if version else ""
     meta_html = f'<span class="meta">{html.escape(meta)}</span>' if meta else ""
@@ -811,7 +886,12 @@ def main() -> int:
     ap.add_argument("-o", "--output", default=None, help="输出 .html（默认同名同目录）")
     ap.add_argument("--theme", default="light", choices=["light", "dark"], help="配色主题")
     ap.add_argument("--title", default=None, help="文档标题（默认取输入文件首个 h1 或文件名）")
-    ap.add_argument("--mermaid", default="on", choices=["on", "off"], help="是否引入 Mermaid CDN")
+    ap.add_argument("--mermaid", default="on", choices=["on", "off", "inline"],
+                    help="图渲染方式：on=引入 CDN（默认，需联网）；"
+                         "inline=把 mermaid 库整段内联（自包含、离线也渲染）；off=不引入，仅保留源码")
+    ap.add_argument("--mermaid-lib", default=None,
+                    help="inline 模式使用的 mermaid.min.js 路径"
+                         "（默认依次查找 环境变量 MERMAID_JS_PATH / ~/.workbuddy/vendor/ / 当前目录）")
     ap.add_argument("--version", default=None, help="顶栏版本标签，如 V1.0（默认从正文元信息表自动识别）")
     ap.add_argument("--meta", default=None, help="顶栏右侧元信息（默认自动识别「需求来源」）")
     args = ap.parse_args()
@@ -842,12 +922,31 @@ def main() -> int:
         m = re.search(r"\|\s*(需求来源|编写依据)\s*\|\s*([^|\n]+)", md)
         meta = f"{m.group(1)}：{m.group(2).strip()}" if m else ""
 
+    mermaid_lib = ""
+    if args.mermaid == "inline":
+        try:
+            mermaid_lib, lib_path = resolve_mermaid_lib(args.mermaid_lib)
+        except FileNotFoundError as err:
+            print("✗ --mermaid inline 需要一份 mermaid.min.js，但以下位置都没有：")
+            print("    " + str(err))
+            print("  一次获取、所有文档共用：")
+            print("    curl -sL -o ~/.workbuddy/vendor/mermaid.min.js \\")
+            print("      https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js")
+            return 1
+        if "```mermaid" not in md:
+            mermaid_lib = ""
+
     dst.write_text(
-        build_html(title, md, args.theme, args.mermaid == "on", version, meta),
+        build_html(title, md, args.theme, args.mermaid == "on", version, meta, mermaid_lib),
         encoding="utf-8", newline="\n",
     )
+    if args.mermaid == "inline":
+        mermaid_desc = ("inline（已内联库 %.0f KB）" % (len(mermaid_lib) / 1024)
+                        if mermaid_lib else "inline（正文无图，未内联）")
+    else:
+        mermaid_desc = args.mermaid
     print(f"✅ 已生成：{dst}")
-    print(f"   标题：{title}｜主题：{args.theme}｜Mermaid：{args.mermaid}"
+    print(f"   标题：{title}｜主题：{args.theme}｜Mermaid：{mermaid_desc}"
           f"｜版本标签：{version or '（无）'}｜元信息：{meta or '（无）'}")
     return 0
 

@@ -118,11 +118,28 @@ python scripts/scaffold_deliverables.py "销售合同执行管理" --out ./outpu
 - 定稿后转换为单文件 HTML（纯标准库，无第三方依赖）：
 
 ```bash
-python scripts/md_to_requirement_html.py "output/需求探索-销售合同执行管理/需求规格说明书-销售合同执行管理.md" --theme light
-# 产出同名 .html：左侧三级可折叠目录树 + 正文卡片 + Mermaid 支持 + 打印/PDF 友好
+python scripts/md_to_requirement_html.py "output/需求探索-销售合同执行管理/需求规格说明书-销售合同执行管理.md" \
+    --theme light --mermaid inline --version v1.0
+# 产出同名 .html：左侧三级可折叠目录树 + 正文卡片 + Mermaid 图 + 打印/PDF 友好
 ```
 
-- 脚本参数：`--theme light|dark`、`--mermaid off`（离线环境去掉 CDN）、`--title`。转换后可用文件预览面板打开核对。
+- 脚本参数：`--theme light|dark`、`--mermaid on|off|inline`、`--version`、`--title`、`--meta`。转换后可用文件预览面板打开核对。
+- **`--mermaid` 三选一 —— 交付件要能在浏览器里看到图，就用 `inline`**：
+
+| 取值 | 体积变化 | 看图是否依赖联网 | 说明 |
+|---|---|---|---|
+| `inline`（**推荐**） | +约 3.4 MB | **否** | 把 mermaid 库整段内联进 HTML，自包含、离线也渲染出图；**正文没有 Mermaid 图时不注入** |
+| `on` | 不变 | 是 | 只写一段 CDN 加载器；离线 / 超时降级为「源码 + 明示提示」 |
+| `off` | 不变 | — | 不渲染，源码留成等宽块（**交付件里看不到图，仅适合纯离线归档**） |
+
+  `inline` 需要一份 `mermaid.min.js`，依次查找 `--mermaid-lib` → 环境变量 `MERMAID_JS_PATH` → `~/.workbuddy/vendor/mermaid.min.js` → 当前目录的 `mermaid.min.js`。一次获取、所有文档共用：
+
+```bash
+mkdir -p ~/.workbuddy/vendor && curl -sL -o ~/.workbuddy/vendor/mermaid.min.js \
+  https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js
+```
+
+- **Mermaid 的节点标签不要用圆括号 / 方括号 / 花括号**（易解析失败）；中文标签一律用双引号包裹，如 `A["主体登记 B-SUB-01"]`、`B{"登记方式"}`。转换器只会把「渲染失败」降级为源码 + 提示，**语法错不会报错**，所以定稿前最好用 mermaid 解析器过一遍图语法。
 
 **状态标记写法（易错，务必遵守）**：`[已确认]` / `[AI自动补全]` / `[待确认]` 必须**直接书写，不要用反引号包裹**。`md_to_requirement_html.py` 的着色逻辑在「先剥离代码段、后替换状态标记」的次序下执行，被反引号包裹的状态标记会被当作行内代码渲染成灰色，失去绿 / 蓝 / 橙着色；转换后应校验 `class="tag s-ok"` 的出现次数远大于 0。
 
