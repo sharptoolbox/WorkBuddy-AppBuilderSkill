@@ -80,10 +80,10 @@ def main() -> int:
         print(f"   - {p.name}")
     print("\n下一步：")
     print("   1) 按 knowledge/01 的八阶段流程推进，每轮确认后写入对应章节（只更新相关章节）")
-    print("   2) 定稿后转换单文件 HTML：")
+    print("   2) 定稿后转换单文件 HTML（--mermaid inline：把库内联，交付件离线也能把图渲染出来）：")
     for p in created:
         if p.name.startswith("需求规格说明书"):
-            print(f'      python scripts/md_to_requirement_html.py "{p}" --theme light')
+            print(f'      python scripts/md_to_requirement_html.py "{p}" --theme light --mermaid inline --version v1.0')
     return 0
 
 
